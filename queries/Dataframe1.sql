@@ -11,12 +11,15 @@ SELECT
 	DATEDIFF(r.return_date, r.rental_date) AS rental_duration_days,
 	p.payment_id,
 	p.amount,
-	p.payment_date
+	p.payment_date,
+	f.film_id
 FROM customer c
 JOIN address a ON c.address_id = a.address_id
 JOIN city ci ON a.city_id = ci.city_id
 JOIN country co ON ci.country_id = co.country_id
 JOIN rental r ON c.customer_id = r.customer_id
+JOIN inventory i ON r.inventory_id = i.inventory_id
+JOIN film f ON i.film_id = f.film_id
 JOIN payment p ON r.rental_id = p.rental_id
 WHERE 
 	r.rental_id IS NOT NULL 

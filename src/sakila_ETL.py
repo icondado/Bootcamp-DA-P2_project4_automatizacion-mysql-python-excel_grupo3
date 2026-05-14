@@ -1,7 +1,21 @@
+# src/sakila_ETL.property
+# Arquitectura: cada consulta SQL queris/*.sql
 from sqlalchemy import create_engine, text
+from pathlib import Path
 from config import *
 import pandas as pd
 import os
+
+# Carpeta de queries relativa a la raíz del proyecto
+QUERIES_DIR = Path(__file__).parent.parent / 'queries'
+
+# Mapeo: nombre_de_archivo_sql → nombre_de_archivo_csv
+# Modelo estrella: 1 tabla de hechos + 3 dimensiones
+CONSULTAS = {
+    "DataFrame1.sql": "DataFrame1.csv",
+    "DataFrame2.sql": "DataFrame2.csv",
+    "DataFrame3.sql": "DataFrame3.csv",
+}
 
 def conection_bd():
     """Establece el motor de conexión (Engine)"""
@@ -12,8 +26,8 @@ def conection_bd():
 
 def test_connection():
     """Probar la conexión a la base de datos"""
-    engine = conection_bd()
     try:
+        engine = conection_bd()
         with engine.connect() as connection:
             print("✅ Conexión exitosa a Sakila.")
             result = connection.execute(text("SELECT * FROM film LIMIT 1;"))
@@ -22,78 +36,42 @@ def test_connection():
         print(f"❌ Error al conectar a la base de datos: {e}")
 
 def get_data_list_from_join():
-    """Obtener datos y generar múltiples CSV"""
-    engine = conection_bd()
-    
-    queries = [
-        {
-            "name": "DataFrame1",
-            "query": """
-                SELECT 
-                    c.customer_id, LOWER(c.first_name) AS first_name, LOWER(c.last_name) AS last_name,
-                    LOWER(c.email) AS email, LOWER(ci.city) AS city, LOWER(co.country) AS country,
-                    r.rental_id, r.rental_date, r.return_date,
-                    DATEDIFF(r.return_date, r.rental_date) AS rental_duration_days,
-                    p.payment_id, p.amount, p.payment_date
-                FROM customer c
-                JOIN address a ON c.address_id = a.address_id
-                JOIN city ci ON a.city_id = ci.city_id
-                JOIN country co ON ci.country_id = co.country_id
-                JOIN rental r ON c.customer_id = r.customer_id
-                JOIN payment p ON r.rental_id = p.rental_id
-                WHERE r.rental_id IS NOT NULL AND p.amount > 0 AND r.return_date IS NOT NULL;
-            """
-        },
-        {
-            "name": "DataFrame2",
-            "query": """
-                SELECT 
-                    LOWER(TRIM(f.title)) AS title, 
-                    LOWER(TRIM(c.name)) AS category, 
-                    LOWER(TRIM(l.name)) AS language,
-                    f.length,
-                    CASE WHEN f.length >= 120 THEN 1 ELSE 0 END AS is_long_film
-                FROM film f
-                JOIN film_category fc ON f.film_id = fc.film_id
-                JOIN category c ON fc.category_id = c.category_id
-                JOIN language l ON f.language_id = l.language_id;
-            """
-        },
-        {
-            "name": "DataFrame3",
-            "query": """
-                SELECT 
-                    f.film_id, f.title, a.actor_id,
-                    CONCAT(LOWER(TRIM(a.first_name)), ' ', LOWER(TRIM(a.last_name))) AS actor_full_name,
-                    (SELECT COUNT(*) FROM film_actor fa2 WHERE fa2.film_id = f.film_id) AS num_actors_per_film,
-                    (SELECT COUNT(*) FROM film_actor fa3 WHERE fa3.actor_id = a.actor_id) AS num_films_per_actor
-                FROM film f
-                JOIN film_actor fa ON f.film_id = fa.film_id
-                JOIN actor a ON fa.actor_id = a.actor_id;
-            """
-        }
-    ]
 
-    # Configuración de rutas
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    PARENT_DIR = os.path.dirname(BASE_DIR)
-    DATA_DIR = os.path.join(PARENT_DIR, "output")
-    os.makedirs(DATA_DIR, exist_ok=True)
-
-    # Abrimos la conexión UNA SOLA VEZ para todas las consultas
+    # Conectar BD
     try:
-        with engine.connect() as connection:
-            for query_info in queries:
-                result = connection.execute(text(query_info["query"]))
-                rows = result.fetchall()
-                
-                # Crear DataFrame
-                df = pd.DataFrame(rows, columns=result.keys())
-
-                # Guardar CSV
-                file_path = os.path.join(DATA_DIR, f"{query_info['name']}.csv")
-                df.to_csv(file_path, index=False, encoding='utf-8')
-                print(f"✅ {query_info['name']} guardado en: {file_path} | Registros: {len(df)}")
-                
+        engine = conection_bd()  
     except Exception as e:
-        print(f"❌ Error durante el proceso ETL: {e}")
+        print(f"❌ Error al conectar a la base de datos: {e}")
+
+    # Extraer datos
+    
+    print("Extrayendo datos de MySQL...")
+    
+    resultados = {}
+    with engine.connect() as connection:
+        for archivo_sql, archivo_csv in CONSULTAS.items():
+            try:
+                ruta_sql = QUERIES_DIR / archivo_sql
+                query = ruta_sql.read_text(encoding='utf-8')
+                df = pd.read_sql(query, engine)
+                
+                resultados[archivo_csv] = df
+                print(f"  ✓ {archivo_sql} → {len(df)} filas")                
+            except Exception as e:
+                print(f"❌ Error durante el proceso ETL: {e}")
+    
+    # Guarda cada DataFrame como CSV en la carpeta output/
+    print("Guardando archivos...")
+    try:
+        os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+        for archivo_csv, df in resultados.items():
+            df.to_csv(f'{OUTPUT_FOLDER}/{archivo_csv}', index=False)
+            print(f"  ✓ {archivo_csv}")
+
+        print(f"✓ Archivos guardados en carpeta '{OUTPUT_FOLDER}/'")
+    except Exception as e:
+        print(f"❌ Error durante el proceso de guardar archivos: {e}")
+
+if __name__ == "__main__":
+    get_data_list_from_join()
